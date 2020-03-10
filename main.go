@@ -91,17 +91,22 @@ func (client *LokiClient) Send(labels []Label, messages []Message) error {
     for i := range messages {
         body.WriteString("[ \"")
         body.WriteString(messages[i].time)
-        body.WriteString("\", \"")
-        body.WriteString(messages[i].message)
+        body.WriteString("\", ")
+        escapedMessage, err := json.Marshal(messages[i].message)
+        if err != nil {
+            return err
+        }
+        body.Write(escapedMessage)
         if i == len(messages) - 1 {
             // don't write ',' to the last message
-            body.WriteString("\" ]\n")
+            body.WriteString(" ]\n")
         } else {
-            body.WriteString("\" ],\n")
+            body.WriteString(" ],\n")
         }
     }
     body.WriteString("]}]}")
 
+    fmt.Println(body.String())
     response, err := http.Post(client.url + client.endpoints.push, "application/json", strings.NewReader(body.String()))
     if response.StatusCode != 204 {
         return errors.New(response.Status)
@@ -159,14 +164,20 @@ func main () {
     }
     message1 := Message {
         time: strconv.FormatInt(time.Now().UnixNano(), 10),
-        message: "test-mesageotnauh",
+        message: "{\"simple\": [\"json\", \"string\"]}",
+    }
+    message2 := Message {
+        time: strconv.FormatInt(time.Now().UnixNano(), 10),
+        message: "not json message",
     }
     labels := []Label{label1}
-    messages := []Message{message1}
+    messages := []Message{message1, message2}
     err = client.Send(labels, messages)
-    response, err := client.Query("{testkey2=~\"test.*\"}")
-    fmt.Println(response)
     if err == nil {
         fmt.Println("Message successfuly sent")
+    } else {
+        fmt.Println(err)
     }
+    response, err := client.Query("{testkey2=~\"test.*\"}")
+    fmt.Println(response)
 }
