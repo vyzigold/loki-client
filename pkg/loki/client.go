@@ -1,17 +1,22 @@
 package loki
 
 import (
-    "fmt"
     "net/http"
     "errors"
-    "strings"
     "io/ioutil"
     "encoding/json"
+    "bytes"
 )
 
-type Label struct {
-    Key   string
-    Value string
+type jsonValue [2]string
+
+type jsonStream struct {
+    Stream map[string]string `json:"stream"`
+    Values []jsonValue `json:"values"`
+}
+
+type jsonMessage struct {
+    Streams []jsonStream `json:"streams"`
 }
 
 type LokiClient struct {
@@ -53,6 +58,7 @@ func CreateClient(url string) (*LokiClient, error) {
     return &client, nil
 }
 
+
 // The template for the message sent to Loki is:
 //{
 //  "streams": [
@@ -69,43 +75,29 @@ func CreateClient(url string) (*LokiClient, error) {
 //}
 
 // Sends the messages to loki with the labels assigned to them
-func (client *LokiClient) Send(labels []Label, messages []Message) error {
-    var body strings.Builder
-    body.WriteString("{\"streams\": [{\"stream\": {")
-    for i := range labels {
-        body.WriteString("\"")
-        body.WriteString(labels[i].Key)
-        body.WriteString("\": \"")
-        body.WriteString(labels[i].Value)
-        if i == len(labels) - 1 {
-            // don't write ',' to the last label
-            body.WriteString("\"\n")
-        } else {
-            body.WriteString("\",\n")
-        }
-    }
-    body.WriteString("},\"values\": [")
-
+func (client *LokiClient) Send(labels map[string]string, messages []Message) error {
+    // build the structure of the json
+    var vals []jsonValue
     for i := range messages {
-        body.WriteString("[ \"")
-        body.WriteString(messages[i].Time)
-        body.WriteString("\", ")
-        escapedMessage, err := json.Marshal(messages[i].Message)
-        if err != nil {
-            return err
-        }
-        body.Write(escapedMessage)
-        if i == len(messages) - 1 {
-            // don't write ',' to the last message
-            body.WriteString(" ]\n")
-        } else {
-            body.WriteString(" ],\n")
-        }
+        var val jsonValue
+        val[0] = messages[i].Time
+        val[1] = messages[i].Message
+        vals = append(vals, val)
     }
-    body.WriteString("]}]}")
+    var stream []jsonStream
+    stream = append(stream, jsonStream {
+        Stream: labels,
+        Values: vals,
+    })
+    msg := jsonMessage {
+        Streams: stream,
+    }
 
-    fmt.Println(body.String())
-    response, err := http.Post(client.url + client.endpoints.push, "application/json", strings.NewReader(body.String()))
+    // encode it and send to loki
+
+    str, err := json.Marshal(msg)
+
+    response, err := http.Post(client.url + client.endpoints.push, "application/json", bytes.NewReader(str))
     if response.StatusCode != 204 {
         return errors.New(response.Status)
     } else {

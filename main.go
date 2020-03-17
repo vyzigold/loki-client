@@ -13,10 +13,8 @@ func main () {
         fmt.Println("Client successfuly created")
         fmt.Println(client)
     }
-    label1 := loki.Label {
-        Key: "testkey2",
-        Value: "testvalue5",
-    }
+    labels := make(map[string]string)
+    labels["labelkey"]="labelvalue"
     message1 := loki.Message {
         Time: strconv.FormatInt(time.Now().UnixNano(), 10),
         Message: "{\"simple\": [\"json\", \"string\"]}",
@@ -25,7 +23,6 @@ func main () {
         Time: strconv.FormatInt(time.Now().UnixNano(), 10),
         Message: "not json message",
     }
-    labels := []loki.Label{label1}
     messages := []loki.Message{message1, message2}
     err = client.Send(labels, messages)
     if err == nil {
@@ -33,6 +30,6 @@ func main () {
     } else {
         fmt.Println(err)
     }
-    response, err := client.Query("{testkey2=~\"test.*\"}")
+    response, err := client.Query("{labelkey=~\"lab.*\"}")
     fmt.Println(response)
 }
