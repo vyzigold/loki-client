@@ -7,12 +7,7 @@ import (
     "github.com/vyzigold/loki-client/pkg/loki"
 )
 
-func main () {
-    client, err := loki.CreateClient("http://localhost:3100")
-    if err == nil {
-        fmt.Println("Client successfuly created")
-        fmt.Println(client)
-    }
+func sendSomething(client *loki.LokiClient) {
     labels := make(map[string]string)
     labels["labelkey"]="labelvalue"
     message1 := loki.Message {
@@ -24,12 +19,20 @@ func main () {
         Message: "not json message",
     }
     messages := []loki.Message{message1, message2}
-    err = client.Send(labels, messages)
+    client.AddStream(labels, messages)
+}
+
+func main () {
+    client, err := loki.CreateClient("http://localhost:3100", 4, 1000000000)
     if err == nil {
-        fmt.Println("Message successfuly sent")
-    } else {
-        fmt.Println(err)
+        fmt.Println("Client successfuly created")
+    }
+    for i := 10; i > 0; i-- {
+        sendSomething(client)
+        time.Sleep(100000000)
     }
     response, err := client.Query("{labelkey=~\"lab.*\"}")
+    fmt.Println("\nthe response of the query currently is:")
     fmt.Println(response)
+    client.Shutdown()
 }

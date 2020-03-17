@@ -6,6 +6,8 @@ import (
     "io/ioutil"
     "encoding/json"
     "bytes"
+    "sync"
+    "time"
 )
 
 type jsonValue [2]string
@@ -20,8 +22,15 @@ type jsonMessage struct {
 }
 
 type LokiClient struct {
-    url       string
-    endpoints Endpoints
+    url            string
+    endpoints      Endpoints
+    currentMessage jsonMessage
+    streams        chan *jsonStream
+    quit           chan struct{}
+    batchCounter   int
+    maxBatch       int
+    maxWaitTime    time.Duration
+    wait           sync.WaitGroup
 }
 
 type Message struct {
@@ -48,14 +57,70 @@ func (client *LokiClient) IsReady() bool {
 }
 
 // Creates a new loki client
-func CreateClient(url string) (*LokiClient, error) {
-    var client LokiClient
-    client.url = url
+// The client runs in a goroutine and sends the data either
+// once it reaches the maxBatch or when it waited for maxWaitTime
+// 
+// the batch counter is incremented every time add is called
+// maxWaitTime uses nanoseconds
+func CreateClient(url string, maxBatch int, maxWaitTime time.Duration) (*LokiClient, error) {
+    client := LokiClient {
+        url: url,
+        maxBatch: maxBatch,
+        maxWaitTime: maxWaitTime,
+        quit: make(chan struct{}),
+        streams: make(chan *jsonStream),
+    }
     client.initEndpoints()
     if !client.IsReady() {
         return &client, errors.New("The server on: " + url + "isn't ready.")
     }
+
+    client.wait.Add(1)
+
+    go client.run()
+
     return &client, nil
+}
+
+func (client *LokiClient) Shutdown() {
+    close(client.quit)
+    client.wait.Wait()
+}
+
+func (client *LokiClient) run() {
+    batchCounter := 0
+    maxWait := time.NewTimer(client.maxWaitTime)
+
+    defer func() {
+        if batchCounter > 0 {
+            client.send()
+        }
+        client.wait.Done()
+    }()
+
+    for {
+        select {
+        case <-client.quit:
+            return
+        case stream := <-client.streams:
+            client.currentMessage.Streams =
+                append(client.currentMessage.Streams, *stream)
+            batchCounter++
+            if batchCounter == client.maxBatch {
+                client.send()
+                batchCounter = 0
+                client.currentMessage.Streams = []jsonStream{}
+                maxWait.Reset(client.maxWaitTime)
+            }
+        case <-maxWait.C:
+            if batchCounter > 0 {
+                client.send()
+                client.currentMessage.Streams = []jsonStream{}
+                batchCounter = 0
+            }
+            maxWait.Reset(client.maxWaitTime)
+        }
+    }
 }
 
 
@@ -74,9 +139,8 @@ func CreateClient(url string) (*LokiClient, error) {
 //  ]
 //}
 
-// Sends the messages to loki with the labels assigned to them
-func (client *LokiClient) Send(labels map[string]string, messages []Message) error {
-    // build the structure of the json
+// Adds another stream to be sent with the next batch
+func (client *LokiClient) AddStream(labels map[string]string, messages []Message) {
     var vals []jsonValue
     for i := range messages {
         var val jsonValue
@@ -84,18 +148,19 @@ func (client *LokiClient) Send(labels map[string]string, messages []Message) err
         val[1] = messages[i].Message
         vals = append(vals, val)
     }
-    var stream []jsonStream
-    stream = append(stream, jsonStream {
+    stream := jsonStream {
         Stream: labels,
         Values: vals,
-    })
-    msg := jsonMessage {
-        Streams: stream,
     }
+    client.streams <- &stream
+}
 
-    // encode it and send to loki
-
-    str, err := json.Marshal(msg)
+// Encodes the messages and sends them to loki
+func (client *LokiClient) send() error {
+    str, err := json.Marshal(client.currentMessage)
+    if err != nil {
+        return err
+    }
 
     response, err := http.Post(client.url + client.endpoints.push, "application/json", bytes.NewReader(str))
     if response.StatusCode != 204 {
